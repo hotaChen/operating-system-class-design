@@ -29,7 +29,8 @@ main()
     plicinithart();  // ask PLIC for device interrupts
     binit();         // buffer cache
     iinit();         // inode table
-    fileinit();      // file table
+    fileinit();    // file table
+    netinit();
     virtio_disk_init(); // emulated hard disk
 #ifdef LAB_NET
     pci_init();
@@ -49,6 +50,5 @@ main()
     trapinithart();   // install kernel trap vector
     plicinithart();   // ask PLIC for device interrupts
   }
-
   scheduler();        
 }

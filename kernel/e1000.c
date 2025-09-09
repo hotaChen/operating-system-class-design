@@ -94,15 +94,30 @@ e1000_init(uint32 *xregs)
 int
 e1000_transmit(char *buf, int len)
 {
-  //
   // Your code here.
   //
   // buf contains an ethernet frame; program it into
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after send completes.
   //
-
-  
+  acquire(&e1000_lock);
+  uint32 tdt = regs[E1000_TDT];
+  struct tx_desc *desc = &tx_ring[tdt];
+  if (!(desc->status & E1000_TXD_STAT_DD)) {
+    release(&e1000_lock);
+    return -1;
+  }
+  if (tx_bufs[tdt]) {
+    kfree((void *)tx_bufs[tdt]);
+    tx_bufs[tdt] = 0;
+  }
+  desc->addr   = (uint64) buf;
+  desc->length = len;
+  desc->cmd    = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  desc->status = 0;
+  tx_bufs[tdt] = buf; 
+  regs[E1000_TDT] = (tdt + 1) % TX_RING_SIZE;
+  release(&e1000_lock);
   return 0;
 }
 
@@ -115,7 +130,27 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver a buf for each packet (using net_rx()).
   //
-
+  acquire(&e1000_lock);
+  for (;;) {
+    uint32 rdt_next = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    struct rx_desc *desc = &rx_ring[rdt_next];
+    if (!(desc->status & E1000_RXD_STAT_DD))
+      break;
+    char *buf = rx_bufs[rdt_next];
+    int len   = desc->length;
+    net_rx(buf, len);
+    char *nbuf = kalloc();
+    if (!nbuf) {
+      desc->status = 0;
+      regs[E1000_RDT] = rdt_next;
+      break;
+    }
+    rx_bufs[rdt_next] = nbuf;
+    desc->addr   = (uint64) nbuf;
+    desc->status = 0;
+    regs[E1000_RDT] = rdt_next;
+  }
+  release(&e1000_lock);
 }
 
 void
