@@ -21,15 +21,17 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
-
+} kmems[NCPU];
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  char lock_name[10];
+  for (int i = 0; i < NCPU; i++) {
+    snprintf(lock_name, 10, "kmem_CPU%d", i);
+    initlock(&(kmems[i].lock), lock_name);
+  }
   freerange(end, (void*)PHYSTOP);
 }
-
 void
 freerange(void *pa_start, void *pa_end)
 {
@@ -56,11 +58,17 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  /** 获取 cpuid 时要关中断，完事之后再把中断开下来 */
+  push_off();
+  int id = cpuid();
+  pop_off();
+  /** 将空闲的 page 归还给第 id 个 CPU */
+  acquire(&(kmems[id].lock));
+  r->next = kmems[id].freelist;
+  kmems[id].freelist = r;
+  release(&(kmems[id].lock));
 }
+
 
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
@@ -70,12 +78,46 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
+  /** 获取 cpuid 时要关中断，完事之后再把中断开下来 */
+  push_off();
+  int id = cpuid();
+  pop_off();
+  /** 尝试获取剩余的空闲 page */
+  acquire(&kmems[id].lock);
+  r = kmems[id].freelist;
   if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
-
+    kmems[id].freelist = r->next;
+  else {
+    // In case the current freelist is empty, we check the other lists of other CPUs 
+    // and take the free spaces if they exist.
+    struct run *tmp;
+    // Loop through the list of CPUs
+    for (int i = 0; i < NCPU; i++) {
+      if (i == id) continue; // Skip if the CPU is the current CPU
+      acquire(&kmems[i].lock);
+      tmp = kmems[i].freelist;
+      if (tmp == 0) { // Skip if the freelist is empty
+        release(&(kmems[i].lock));
+      } else {
+        // steal 10 pages
+        for (int j = 0; j < 10; j++) {
+          if (tmp->next)
+            tmp = tmp->next;
+          else break;
+        }
+        kmems[id].freelist = kmems[i].freelist;
+        kmems[i].freelist = tmp->next;
+        tmp->next = 0;
+        release(&(kmems[i].lock));
+        break;
+      }
+    }
+    r = kmems[id].freelist;
+    if (r)
+      kmems[id].freelist = r->next;
+  }
+  release(&(kmems[id].lock));
+  /** 有一种可能：第id个CPU没有空闲 page ，也没偷到 */
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
