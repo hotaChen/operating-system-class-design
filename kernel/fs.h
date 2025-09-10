@@ -1,7 +1,6 @@
 // On-disk file system format.
 // Both the kernel and user programs use this header file.
-
-
+#define NSYMLINK 10
 #define ROOTINO  1   // root i-number
 #define BSIZE 1024  // block size
 
@@ -24,10 +23,10 @@ struct superblock {
 
 #define FSMAGIC 0x10203040
 
-#define NDIRECT 12
+#define NDIRECT 11
 #define NINDIRECT (BSIZE / sizeof(uint))
-#define MAXFILE (NDIRECT + NINDIRECT)
-
+#define MAXFILE (NDIRECT + NINDIRECT + NDOUBLYINDIRECT)
+#define NDOUBLYINDIRECT (NINDIRECT * NINDIRECT)
 // On-disk inode structure
 struct dinode {
   short type;           // File type
@@ -35,7 +34,7 @@ struct dinode {
   short minor;          // Minor device number (T_DEVICE only)
   short nlink;          // Number of links to inode in file system
   uint size;            // Size of file (bytes)
-  uint addrs[NDIRECT+1];   // Data block addresses
+  uint addrs[NDIRECT+2];   // Data block addresses
 };
 
 // Inodes per block.
